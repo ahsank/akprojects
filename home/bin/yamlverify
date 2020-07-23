@@ -1,0 +1,10 @@
+#!python3
+
+import sys
+import yaml
+
+with open(sys.argv[1]) as f:
+  y = yaml.load(f)
+
+print (y)
+

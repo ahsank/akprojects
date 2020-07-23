@@ -1,0 +1,17 @@
+#!/bin/bash
+
+array=( "$@" )
+DEST="${array[${#array[@]}-1]}"
+echo $DEST
+unset "array[${#array[@]}-1]"
+arrIN=(${DEST//:/ })
+VM=${arrIN[0]}
+echo $VM
+if [[ "$VM" =~ ".*[0-9]" ]]
+then
+    VM=bastion.syssec.foundation.${VM}-uswest2.aws.sfdc.cl
+fi
+
+DEST="${VM}:${arrIN[1]}"
+
+scp  -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ${array[@]} $DEST

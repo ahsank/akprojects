@@ -1,0 +1,113 @@
+COMMAND=save
+while [[ $# -gt 0 ]]
+do
+    opt="$1"
+    case $opt in
+        --restore|-r)
+            COMMAND=restore
+            shift 1
+            ;;
+        --no|-n)
+            NOCOPY=true
+            shift 1
+            ;;
+        --commit|-c)
+            COMMIT=$2
+            shift 2
+            ;;
+        --hostname|-h)
+            HOSTNAME=$2
+            shift 2
+            ;;
+    
+        --createdir|-d)
+            DIR=true
+            shift 1
+            ;;
+        --print|-p)
+            COMMAND=print
+            shift 1
+            ;;
+        --snippet|-p)
+            COMMAND=snippet
+            shift 1
+            ;;
+        --machine|-m)
+            HOSTNAME=$2
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+[ -z "$HOSTNAME" ] && HOSTNAME=$(hostname -s)
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+		filepath=$(greadlink -f $1)
+else
+		filepath=$(readlink -f $1)
+fi
+echo $COMMAND
+
+savedir=${2:-~/work/src/local/save}
+filedir=$(dirname "${filepath}")
+gitdir="${savedir}/${HOSTNAME}/${filedir}"
+gitfile="${savedir}/${HOSTNAME}/${filedir}/$(basename $filepath)"
+
+if [ "$COMMAND" == save ];
+then
+    echo "came here save"
+
+    mkdir -p $gitdir
+    if [[ -d $1 ]]; then
+        cp -r $1 $gitdir
+    else
+        cp $1 $gitdir
+    fi
+    pushd $savedir
+    git add $gitdir
+    git commit -m "Update $1"
+    popd
+fi
+
+if [ "$COMMAND" == restore ];
+then
+    if [[ -d $gitfile ]]; then
+        cp -r $gitfile $1
+    elif [[ -f $gitfile ]]; then
+        cp  $gitfile $1
+    else
+        echo "$gitfile doesn't exist"
+        exit 1
+    fi
+
+    # [ ! -f $gitfile ] &&  echo "file doesn't exist " && exit 1
+    #echo copying cp $gitfile $1
+    # cp $gitfile $1
+fi
+
+if [ "$COMMAND" == print ];
+then
+    pushd $savedir
+    git show $gitfile
+    popd
+fi
+
+if [ "$COMMAND" == snippet ];
+then
+    echo came here
+    savedir=${2:-~/work/src/local/save}
+    gitdir="${savedir}/${HOSTNAME}/snipppet"
+    echo $gitdir
+    mkdir -p ${gitdir}
+    gitfile="${gitdir}/$1"
+    echo $gitfile
+    echo "enter snippet ${gitfile} and press control d"
+    cat >> ${gitfile}
+    pushd $gitdir
+    git add ${gitfile}
+    git commit -m "Update $1"
+    popd
+fi

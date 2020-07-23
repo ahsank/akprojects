@@ -1,0 +1,34 @@
+#!/bin/bash
+
+command=$1
+shift 1
+SCRIPT=`realpath $0`
+[ -z "$command" ] && echo "No command given " &&  exit 1
+
+case $command in
+     activate)
+         source ~/work/env/python/$1/bin/activate
+         ;;
+     gitsync)
+         git fetch upstream master:master && \
+             git push origin master:master && \
+             git rebase master && \
+             git push origin HEAD
+         ;;
+     register)
+         ln -s  $SCRIPT ~/bin/mycmd
+         ;;
+     spinnaker-verify)
+         cd ~/work/src/git.soma.salesforce.com/ahsan-khan/spinnaker-artifacts//pipeline-generator
+         source ~/work/env/pipeline/bin/activate
+         python -m src.pipeline_generator --limit-team prafire  --pipeline-repo \
+                ~/work/src/git.soma.salesforce.com/ahsan-khan/spinnaker --spinnaker-instance SPINNAKER_PROD --dry-run
+         ;;
+     *)
+         echo "Invalid command $command, must be one of gitsync,  register, spinnaker-verify"
+         ;;
+esac
+exit $?
+
+
+      

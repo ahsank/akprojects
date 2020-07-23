@@ -1,0 +1,604 @@
+#!/bin/bash
+
+
+opt="$1"
+export PIAB=~/.piab
+case $opt in
+    --piab|-p)
+        PIAB="$2"
+        shift 2
+        ;;
+    *)
+        ;;
+esac
+
+
+KEY=$(find -L ${PIAB} ~/.ssh -maxdepth 1 -name 'zz*'  -print -quit)
+echo using $KEY
+
+COMMON_OPT="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+PPMIP=
+
+# $1 is role
+function getremoteip()
+{
+    python3 <<EOF
+import yaml
+import os
+import sys
+
+key = "$1"
+with open(os.path.join(os.environ['PIAB'], 'roles.yaml')) as file:
+  doc = yaml.load(file)
+if key not in doc:
+  sys.exit("host role {0} not found".format(key))
+print(doc["$1"]["ip"])
+EOF
+}
+
+# $1 is the role
+function setenvvar()
+{
+  if [ $1 = puppetdev ];
+  then
+    source $PIAB/puppetdevenv.sh
+    [ -z "$PIABHOST" ] && echo "No PIABHOST env set " && exit 1
+    KEY=${PIABKEY}
+    IPROLE=${PIABHOST}
+  else
+    IPROLE=$(getremoteip $ROLE)
+  fi
+}
+
+# 1 = git versin like HEAD~1
+function changed_files()
+{
+    if [ -z $1 ]; then
+        sort -u <(git diff --name-only --diff-filter=d --cached) <(git ls-files --modified)
+    else
+        sort -u <(git diff --name-only --diff-filter=d $1)
+    fi
+}
+
+# $1 is file or dir
+function list_files()
+{
+		git ls-files $1
+}
+
+# $1 is file or dir $2 is revision
+function show_files()
+{
+		if [ -z $2 ]; then
+				git show HEAD:$1
+		else
+				git show $2:$1
+		fi
+}
+
+function removed_files()
+{
+    if [ -z $1 ]; then
+        sort -u <(git diff --name-only --diff-filter=D --cached)
+    else
+        sort -u <(git diff --name-only --diff-filter=D $1)
+    fi
+}
+
+# $1 is the command
+function ssh_cmd()
+{
+  ssh -q -i $KEY  -o UserKnownHostsFile=/dev/null  -o StrictHostKeyChecking=no \
+      centos@$IPROLE "$1"
+}
+
+command=$1
+[ -z "$command" ] && echo "No command given " &&  exit 1
+
+
+if [ $command = gitdiff ];
+then
+  shift 1
+  ROOT=/etc
+  MAIN=false
+  DIR=false
+  REMOVE=true
+  SUDOCMD="sudo"
+
+  while [[ $# -gt 0 ]]
+  do
+    opt="$1"
+    case $opt in
+        --puppetdev|-p)
+          ROOT="/home/centos"
+          setenvvar puppetdev
+          SUDOCMD=""
+          shift 1
+          ;;
+        --main|-m)
+          # Update puppet itself
+          MAIN=true
+          shift 1
+          ;;
+        --no|-n)
+           NOCOPY=true
+           shift 1
+           ;;
+        --notremove|-k)
+           # Keep deleted files
+           REMOVE=false
+           shift 1
+           ;;
+        --commit|-c)
+            COMMIT=$2
+            shift 2
+            ;;
+        --createdir|-d)
+            DIR=true
+            shift 1
+            ;;
+        *)
+          break
+          ;;
+      esac
+  done
+  [ -z "$IPROLE" ] && IPROLE=$(getremoteip ppm)
+  [ -z "$IPROLE" ] && echo "Cannot get remote machine address " && exit 1
+  ROLE=$1
+
+  if [ "$MAIN" = true ];
+  then
+    DEST=$ROOT/puppet
+    ERRMSG="$DEST folder not found"
+  else
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+    DEST=$ROOT/puppet/modules/$ROLE
+    ERRMSG="Invalid module $ROLE"
+  fi
+
+  # echo "$DEST"
+  ssh_cmd "[ -d $DEST ]" || { echo "$ERRMSG" ; exit 1; }
+  # DEST_REPO=$(ssh_cmd "cd $DEST; git config --get remote.origin.url")
+  # DEST_REPO=$(basename "$DEST_REPO")
+  # SRC_REPO=$(git config --get remote.origin.url)
+  # SRC_REPO=$(basename "$SRC_REPO")
+  # [ ! "$SRC_REPO" = "$DEST_REPO" ]  && echo "respos dont match $SRC_REPO $DEST_REPO" && exit 1
+
+  changed_files $COMMIT | \
+    while  read -r line;
+    do
+      CMD="${SUDOCMD} tee '$DEST/$line' > /dev/null"
+      if [ "$DIR" = true ];
+      then
+          CMD="${SUDOCMD} mkdir -p '$(dirname $DEST/$line)';${CMD}"
+      fi
+      echo redirecting $line to $CMD
+      [ "$NOCOPY" == true ] || cat $line | ssh_cmd "$CMD" ;
+    done
+
+  if [ "$REMOVE" = true ]; then
+      # Handle file names with space
+      IFS=$'\n'
+      arr=( $(removed_files $COMMIT) )
+      for line in ${arr[@]}
+      do
+          echo running "${SUDOCMD} rm '$DEST/$line'"
+          [ "$NOCOPY" == true ] || ssh_cmd "${SUDOCMD} rm '$DEST/$line' > /dev/null" ;
+      done
+      unset IFS
+
+  fi
+  exit 0
+fi
+
+if [ $command = gitcp ];
+then
+	# gitcp -p -m -n -e -c -d role file|dir  
+  shift 1
+  ROOT=/etc
+  MAIN=false
+  DIR=false
+  REMOVE=false
+  SUDOCMD="sudo"
+
+  while [[ $# -gt 0 ]]
+  do
+    opt="$1"
+    case $opt in
+        --puppetdev|-p)
+          ROOT="/home/centos"
+          setenvvar puppetdev
+          SUDOCMD=""
+          shift 1
+          ;;
+        --main|-m)
+          # Update puppet itself
+          MAIN=true
+          shift 1
+          ;;
+        --no|-n)
+           NOCOPY=true
+           shift 1
+           ;;
+        --erase|-e)
+           # delete file
+           REMOVE=true
+           shift 1
+           ;;
+        --commit|-c)
+            COMMIT=$2
+            shift 2
+            ;;
+        --createdir|-d)
+            DIR=true
+            shift 1
+            ;;
+        *)
+          break
+          ;;
+      esac
+  done
+  [ -z "$IPROLE" ] && IPROLE=$(getremoteip ppm)
+  [ -z "$IPROLE" ] && echo "Cannot get remote machine address " && exit 1
+  ROLE=$1
+	FILE=$2
+
+	[ -z "$ROLE" ] && echo "No role given " && exit 1
+	[ -z "$FILE" ] && echo "No file or dirrectory given " && exit 1
+	
+  if [ "$MAIN" = true ];
+  then
+    DEST=$ROOT/puppet
+    ERRMSG="$DEST folder not found"
+  else
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+    DEST=$ROOT/puppet/modules/$ROLE
+    ERRMSG="Invalid module $ROLE"
+  fi
+
+  # echo "$DEST"
+  ssh_cmd "[ -d $DEST ]" || { echo "$ERRMSG" ; exit 1; }
+  # DEST_REPO=$(ssh_cmd "cd $DEST; git config --get remote.origin.url")
+  # DEST_REPO=$(basename "$DEST_REPO")
+  # SRC_REPO=$(git config --get remote.origin.url)
+  # SRC_REPO=$(basename "$SRC_REPO")
+  # [ ! "$SRC_REPO" = "$DEST_REPO" ]  && echo "respos dont match $SRC_REPO $DEST_REPO" && exit 1
+
+	if [ "$REMOVE" = false ]; then
+  list_files $FILE | \
+    while  read -r line;
+    do
+      CMD="${SUDOCMD} tee '$DEST/$line' > /dev/null"
+      if [ "$DIR" = true ];
+      then
+          CMD="${SUDOCMD} mkdir -p '$(dirname $DEST/$line)';${CMD}"
+      fi
+      echo redirecting $line to $CMD
+      [ "$NOCOPY" == true ] || show_files $line $COMMIT | ssh_cmd "$CMD" ;
+    done
+	fi
+  if [ "$REMOVE" = true ]; then
+      # Handle file names with space
+      IFS=$'\n'
+      arr=( $(list_files $FILE) )
+      for line in ${arr[@]}
+      do
+          echo running "${SUDOCMD} rm '$DEST/$line'"
+          [ "$NOCOPY" == true ] || ssh_cmd "${SUDOCMD} rm '$DEST/$line' > /dev/null" ;
+      done
+      unset IFS
+  fi
+  exit 0
+fi
+
+if [ $command = fgitdiff ];
+then
+    #forced git diff fgitdiff role file1 file2
+  shift 1
+  ROOT=/etc
+  MAIN=false
+  DIR=false
+  SUDOCMD="sudo"
+
+  while [[ $# -gt 0 ]]
+  do
+    opt="$1"
+    case $opt in
+        --puppetdev|-p)
+          ROOT="/home/centos"
+          setenvvar puppetdev
+          SUDOCMD=""
+          shift 1
+          ;;
+        --main|-m)
+          # Update puppet itself
+          MAIN=true
+          shift 1
+          ;;
+        --no|-n)
+           NOCOPY=true
+           shift 1
+           ;;
+        --createdir|-d)
+            DIR=true
+            shift 1
+            ;;
+        *)
+          break
+          ;;
+      esac
+  done
+  [ -z "$IPROLE" ] && IPROLE=$(getremoteip ppm)
+  [ -z "$IPROLE" ] && echo "Cannot get remote machine address " && exit 1
+  ROLE=$1
+  shift 1
+
+  if [ "$MAIN" = true ];
+  then
+    DEST=$ROOT/puppet
+    ERRMSG="$DEST folder not found"
+  else
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+    DEST=$ROOT/puppet/modules/$ROLE
+    ERRMSG="Invalid module $ROLE"
+  fi
+
+  for line in $*
+  do
+      CMD="${SUDOCMD} tee $DEST/$line > /dev/null"
+      if [ "$DIR" = true ];
+      then
+          CMD="${SUDOCMD} mkdir -p $(dirname $DEST/$line);${CMD}"
+      fi
+      echo copying $line to centos@$IPROLE:$DEST/$line
+      [ "$NOCOPY" == true ] || cat $line | ssh_cmd "$CMD" ;
+  done
+  exit 0
+fi
+
+if [ $command = gitdifflocal ];
+then
+    ROLE=$2
+
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+
+    [ -d ../puppet/modules/$ROLE ] || (echo "Invalid module $ROLE"; exit 1);
+
+    git ls-files .  --exclude-standard -o -m | \
+    while  read -r line;
+    do
+        cp -v $line ../puppet/modules/$ROLE/"$line" ;
+    done
+    exit 0
+fi
+
+
+if [ $command = cp ];
+then
+    shift 1
+
+    ROLE=ppm
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+    PPMIP=$(getremoteip $ROLE)
+    [ -z "$PPMIP" ] && echo "Cannot get remote machine address " && exit 1
+    SRC=$1
+    DEST=$2
+
+    [ -z "$SRC" ] && echo "No source given " && exit 1
+    [ -z "$DEST" ] && echo "No dest given " && exit 1
+
+
+     ssh -i $KEY -o StrictHostKeyChecking=no \
+       centos@$PPMIP "[ -d $DEST ]" || (echo "Invalid DEST"; exit 1);
+
+    echo copying $SRC to centos@$PPMIP:$DEST/$(basename $SRC)
+    cat $SRC | ssh -i $KEY  -o StrictHostKeyChecking=no \
+             centos@$PPMIP "sudo tee $DEST/$(basename $SRC) > /dev/null" ;
+    exit 0
+
+fi
+
+if [ $command = rcmd ];
+then
+    shift 1
+    ROLE=$1
+    [ -z "$ROLE" ] && echo "No role given " && exit 1
+    setenvvar $ROLE
+    PPMIP=$(getremoteip ppm)
+    [ -z "$PPMIP" ] && echo "Cannot get remote machine address " && exit 1
+    CMD=$2
+    [ -z "$CMD" ] && echo "No command given " && exit 1
+    echo running $CMD to centos@$PPMIP
+     ssh -i $KEY  -o StrictHostKeyChecking=no \
+             centos@$PPMIP "$CMD" ;
+     exit 0
+fi
+
+if [ $command = test ];
+then
+    ROLE=$2
+
+  [ -z "$ROLE" ] && echo "No role given " && exit 1
+
+  export OSTACK_URL=https://vir407-prd.soma.salesforce.com:5000/v2.0/tokens
+  export OSTACK_TENANT=puppet_shared
+  export OSTACK_LOGIN=puppet_shared
+  export OSTACK_PASSWORD=default
+  export OSTACK_SSH_USER=centos
+  export OSTACK_SSH_KEY_NAME=ahsan_khan-ahsankhan-wsl1-puppet_shared
+  export OSTACK_SSH_KEY=/home/ahsan.khan/.ssh/ahsan_khan-ahsankhan-wsl1-puppet_shared
+# ( ~/.piab/*.pem )
+  export OSTACK_IMAGE=0e8c30f4-a152-47d2-9c56-55afd83af0d7
+  export OSTACK_FLAVOR=000ed0d9-cb8c-47d2-9cac-be6a8e2d4885
+  export NO_PUPPET_RUN=1
+  export TEST_ENV="openstack"
+
+  echo '*** SSH key *** '
+  echo $OSTACK_SSH_KEY
+
+  # ruby ~/work/src/local/code/scripttest/makekey.rb
+  ruby $(pwd)/test/test-role_${ROLE}.rb
+  exit 0
+fi
+
+if [ $command = getip ];
+then
+  ROLE=$2
+
+
+  [ -z "$ROLE" ] && echo "No role given " && exit 1
+  echo $(getremoteip $ROLE)
+  exit 0
+fi
+
+if [ $command = fixhost ];
+then
+    HOST=$2
+    ROLE=$3
+
+  [ -z "$HOST" ] && echo "No host given " && exit 1
+  [ -z "$ROLE" ] && echo "No role given " && exit 1
+
+  IPHOST=$(getremoteip $HOST)
+  IPROLE=$(getremoteip $ROLE)
+  HOSTNAME=piab1-${HoST}1-1-piab.eng.sfdc.net
+  ROLENAME=piab1-${ROLE}1-1-piab.eng.sfdc.net
+  FILENAME=/etc/hosts
+  ssh -i $KEY  -o StrictHostKeyChecking=no \
+         centos@$IPHOST "grep $ROLENAME $FILENAME;sudo sed -ri 's/127\\.0\\.0\\.1(.*${ROLE}1-1.*)/${IPROLE}\1/g' $FILENAME"
+
+  exit 0
+fi
+
+if [ $command = copycert ];
+then
+  IPHOST=$(getremoteip pkicontroller)
+  IPROLE=$(getremoteip pkica)
+
+  ssh -i $KEY  -o StrictHostKeyChecking=no \
+  centos@$IPROLE "sudo tar -C /home/pkisvc/private/security-controller -cvf - ." | \
+  ssh -i $KEY \
+  -o StrictHostKeyChecking=no  \
+  centos@$IPHOST "sudo mkdir -p /vagrant/pki_service; sudo tar -C /vagrant/pki_service -xvf -"
+
+  exit 0
+fi
+
+if [ $command = ssh ];
+then
+  ROLE=$2
+  [ -z "$ROLE" ] && echo "No role given " && exit 1
+  setenvvar $ROLE
+  ssh -i $KEY  -o StrictHostKeyChecking=no centos@$IPROLE $3
+  exit 0
+fi
+
+if [ $command = scp ];
+then
+  shift 1
+  while [[ $# -gt 0 ]]
+  do
+    opt="$1"
+    case $opt in
+        --asroot|-r)
+          ASROOT=true
+          shift 1
+          ;;
+        *)
+          break
+          ;;
+      esac
+  done
+  ROLE=$1
+  [ -z "$ROLE" ] && echo "No role given " && exit 1
+  setenvvar $ROLE
+  if [ "$ASROOT" = true ];
+  then
+    echo ${3}/$(basename $2)
+    cat $2 | ssh_cmd "sudo tee ${3}/$(basename $2) > /dev/null" ;
+  else
+    scp -i $KEY  -p -o StrictHostKeyChecking=no $2 centos@$IPROLE:$3
+  fi
+  exit 0
+fi
+
+if [ $command = nscp ];
+then
+  # scp with args with format <role_name>:<file_path> file name converted to
+  # centos@<role_ip>:<file_path>
+		shift 1
+	  while [[ $# -gt 0 ]]
+		do
+				opt="$1"
+				case $opt in
+						--sudo)
+								ASROOT=true
+								shift 1
+								;;
+						*)
+								break
+								;;
+				esac
+		done
+	
+  newarg=()
+  for var in "$@"
+  do
+      if [[ $var == *:* ]] ; then
+          ROLE=${var%:*}
+          REST=${var#*:}
+          setenvvar $ROLE
+          newarg+=(centos@${IPROLE}:${REST})
+      else
+          newarg+=($var)
+      fi
+  done
+	if [ "$ASROOT" = true ];
+  then
+			len=${#newarg[@]}
+			tarcmd=()
+			# use for loop to read all values and indexes
+			for (( i=0; i<${len}-1; i++ ));
+			do
+					tarcmd+=("-C")
+					tarcmd+=(${newarg[$i]})
+			done
+			var=${newarg[${len}-1]}
+      ROLE=${var%:*}
+      REST=${var#*:}
+			echo tar -c ${tarcmd[@]} "|" ssd_cmd \
+					 "sudo tar -x --no-same-owner -C ${REST}"
+		 tar -c ${tarcmd[@]} . | \
+					 ssh_cmd "sudo tar -x --no-same-owner -C ${REST}"
+
+  else
+			echo scp "${newarg[@]}"
+			scp -i $KEY  -p -o StrictHostKeyChecking=no "${newarg[@]}"
+  fi
+
+
+  exit 0
+fi
+
+if [ $command = syncpiab ];
+then
+  setenvvar puppetdev
+
+  # Save the previous keys
+  mkdir -p $PIAB/oldkeys
+  mv $PIAB/zz* $PIAB/oldkeys
+  scp -i $KEY  -o StrictHostKeyChecking=no centos@$IPROLE:.piab/* $PIAB
+  scp -i $KEY  -o StrictHostKeyChecking=no centos@$IPROLE:.ssh/zz* $PIAB
+#  chmod 0600 $PIAB/*.pem
+  exit 0
+fi
+
+if [ $command = register ];
+then
+  shift 1
+  echo "export PIABKEY=$1" > $PIAB/puppetdevenv.sh
+  echo "export PIABHOST=$2" >> $PIAB/puppetdevenv.sh
+  exit 0
+fi
+
+echo "Invalid command $command, must be one of gitdiff, cp, rcmd"

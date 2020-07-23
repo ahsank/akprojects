@@ -1,0 +1,107 @@
+<html>
+<head>
+<meta charset="utf-8">
+<title>Topic document</title>
+<style>
+ /**
+ textarea, #preview { width: 500px; height: 150px; margin-bottom: 1em; padding: .5em 1em; }
+ #preview {
+ border: 1px solid #666;
+ height: 200px;
+ overflow: scroll;
+ }
+ 
+  *//
+</style>
+<!-- From https://cdnjs.com/libraries/pagedown -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pagedown/1.0/Markdown.Converter.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pagedown/1.0//Markdown.Sanitizer.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prettify/r298/run_prettify.js"></script>
+<script>
+ (function() {
+ $(function() {
+  // When using more than one `textarea` on your page, change the following line to match the one you’re after
+  var $textarea = $('textarea#main'),
+      $preview = $('<div id="preview" />').insertAfter($textarea),
+      convert = new Markdown.getSanitizingConverter().makeHtml;
+  $textarea.keyup(function() {
+    $preview.html(convert($textarea.val()));
+    $("pre").addClass("prettyprint");
+  }).trigger('keyup');
+ });
+
+ $(function() {
+  var $textarea = $('textarea#secondary'),
+      $preview = $('<div id="preview1" />').insertBefore($textarea),
+      convert = new Markdown.getSanitizingConverter().makeHtml;
+  $textarea.keyup(function() {
+    $preview.html(convert($textarea.val()));
+    $("pre").addClass("prettyprint");
+  }).trigger('keyup');
+
+ });
+
+ })(document, 'script');
+</script>
+<script>
+$(document).ready(function() {
+    var $textarea = $('textarea#secondary');
+	var f1 = function(saved) {
+      $textarea.val(saved);
+	  $textarea.trigger('keyup');
+    };
+    $saved = localStorage.getItem('scratchpad');
+	f1($saved);
+	// chrome.storge.sync.get('scratchpad', f1);
+  });
+</script>
+<script>
+  $(window).unload(function() {
+    var $file = $('textarea#secondary').val();
+	// var  jsonfile = {};
+    // jsonfile['scratchpad'] = $file;
+	// chrome.storage.sync.set(jsonfile, function() {});
+    localStorage.setItem('scratchpad', $file);
+	// console.log('saving:' + $file);
+  });
+</script>
+<script type="text/javascript">
+<!--
+function toggle_visibility(id) {
+   var e = document.getElementById(id);
+   if(e.style.display == 'block')
+     e.style.display = 'none';
+   else
+      e.style.display = 'block';
+}
+//-->
+</script>
+</head>
+<body>
+<textarea style="display:none" id="main" autofocus>
+
+
+</textarea>
+
+<h1>Other</h1>
+
+<a href="#" onclick="toggle_visibility('foo');">More detail</a>
+<div id="foo" style="display:none">
+<pre>
+class Voila {
+public:
+  // Voila
+   static const string VOILA = "Voila";
+
+  // will not interfere with embedded tags.
+}
+
+</pre>
+</div>
+<div style="width:100%">
+<textarea id="secondary" style="width:100%" rows=20 overflow="scroll">
+</textarea>
+</div>
+</body>
+</html>
